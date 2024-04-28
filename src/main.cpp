@@ -12,6 +12,7 @@
 #include <vector>
 #include <codecvt>
 #include <iomanip>
+#include <cmath>
 
 //constexpr std::uint32_t SCALE {100'000};
 std::uint64_t NR_LITERE {};
@@ -30,6 +31,8 @@ private:
 void check_arg_count(int argc) {
     if (argc < 2) {
         throw Error {"No file path provided!"};
+    } else if (argc < 3) {
+        throw Error {"No command provided! Input decompress or compress"};
     }
 }
 
@@ -45,7 +48,9 @@ void countLetters(std::wstring_view contents) {
     for (auto elem : contents) {
         if (iswalpha(elem)) {
             ++NR_LITERE;
-            ++FREQ[elem];
+            ++FREQ[towlower(elem)];
+        } else if (iswspace(elem) || elem == L'\n') {
+            ++FREQ[towlower(elem)];
         }
     }
 }
@@ -64,7 +69,7 @@ public:
     }
 };
 
-void generateHuffmanCodes(Node* node, const std::wstring& code, std::map<wchar_t, std::wstring>& huffmanCodes) {
+void generateHuffmanCodes(Node* node, const std::wstring& code, std::map<wchar_t, std::wstring>& huffmanCodes, std::map<std::wstring, wchar_t>& huffmanCodesPrime) {
     if (node == nullptr) {
         return;
     }
@@ -72,13 +77,14 @@ void generateHuffmanCodes(Node* node, const std::wstring& code, std::map<wchar_t
     // If this is a leaf node (it has a character), then we've found a Huffman code for the character
     if (node->left == nullptr && node->right == nullptr) {
         huffmanCodes[node->chr] = code;
+        huffmanCodesPrime[code] = node->chr;
     }
 
     // Traverse the left subtree with a '0' added to the code
-    generateHuffmanCodes(node->left, code + L'0', huffmanCodes);
+    generateHuffmanCodes(node->left, code + L'0', huffmanCodes, huffmanCodesPrime);
 
     // Traverse the right subtree with a '1' added to the code
-    generateHuffmanCodes(node->right, code + L'1', huffmanCodes);
+    generateHuffmanCodes(node->right, code + L'1', huffmanCodes, huffmanCodesPrime);
 }
 
 std::wstring compress(const std::wstring& input, const std::map<wchar_t, std::wstring>& huffmanCodes) {
@@ -116,15 +122,78 @@ std::wstring decompress(const std::wstring& input, Node* root) {
     return output;
 }
 
+auto findValue(const std::wstring& value,  const std::map<wchar_t, std::wstring>& huffmanCodes) {
+
+    for (auto it = huffmanCodes.begin(); it != huffmanCodes.end(); ++it) {
+        if (value == it->second) {
+            return it;
+        }
+    }
+    return huffmanCodes.end();
+}
+
+std::wstring decompress(const std::wstring& input, const std::map<std::wstring, wchar_t>& huffmanCodesPrime) {
+
+    std::wstring tmp, output;
+    for (auto ch : input) {
+        tmp += ch;
+        if (huffmanCodesPrime.contains(tmp)) {
+            output += huffmanCodesPrime.at(tmp);
+            tmp.clear();
+        }
+    }
+    return output;
+}
+
+void writeBytes(const std::string& filename, const std::vector<uint8_t>& bytes) {
+    std::ofstream file(filename, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+//01000000 01000111
+std::vector<uint8_t> toBytes(const std::wstring& input) {
+    std::vector<uint8_t> output;
+    for (size_t i = 0; i < input.size(); i += 8) {
+        uint8_t byte = 0;
+        //00000001
+        for (size_t j = 0; j < 8 && i + j < input.size(); ++j) {
+            byte = (byte << 1) | (input[i + j] == L'1' ? 1 : 0);
+        }
+        output.push_back(byte);
+    }
+    return output;
+}
+
+float lungimeMedieCod(const std::map<wchar_t, std::wstring>& huffmanCodes) {
+    float codesLength = 0;
+    for (const auto& elem : huffmanCodes) {
+        float pA = (float) FREQ[elem.first] / (float) NR_LITERE;
+        auto lA = elem.second.size();
+        codesLength += pA * lA;
+    }
+
+    return codesLength;
+
+}
+
+float entropy() {
+    float rez = 0.f;
+
+    for (const auto& elem : FREQ) {
+        float pS = (float) FREQ[elem.first] / (float) NR_LITERE;
+        rez += pS * std::log(pS);
+    }
+    return -rez;
+}
+
 int main(int argc, char** argv) {
-/*
+
     try {
         check_arg_count(argc);
     } catch (Error& e) {
         std::cout << e.what();
         return 0;
     }
-*/
+
     //std::cout << "Path: " << argv[1];
 
     //std::setlocale(LC_ALL, "en_US.UTF-8");
@@ -133,7 +202,7 @@ int main(int argc, char** argv) {
     FPTR fin;
 
     try {
-        fin = open_file("./Tara_Mea");
+        fin = open_file(argv[1]);
     } catch (Error& e) {
         std::cout << e.what();
         return 0;
@@ -148,20 +217,6 @@ int main(int argc, char** argv) {
     std::wstring buffer {ss.str()};
 
     countLetters(buffer);
-
-    std::wofstream fout {"output.txt"};
-
-    fout << "Sunt " << NR_LITERE << " de litere in fisier.\n";
-
-    for (auto elem : FREQ) {
-        fout << elem.first << std::left << std::setw(1) << ": " <<
-        std::left << std::setw(10) <<
-        elem.second << "P: " <<
-        std::left << std::setw(1) <<
-        elem.second << "/" << NR_LITERE << '\n';
-    }
-
-    std::cout << "Ran with success!";
 
     std::priority_queue<Node*, std::vector<Node*>, Compare> queue;
 
@@ -180,10 +235,8 @@ int main(int argc, char** argv) {
         Node* right = queue.top();
         queue.pop();
 
-        // Create a new node
         Node* newNode = new Node {'\0', left->freq + right->freq, left, right};
 
-        // Enqueue the new node
         queue.push(newNode);
     }
 
@@ -193,24 +246,57 @@ int main(int argc, char** argv) {
 
     std::wstring codes;
     std::map<wchar_t, std::wstring> huffmanCodes;
+    std::map<std::wstring, wchar_t> huffmanCodesPrime;
+    generateHuffmanCodes(root, codes, huffmanCodes, huffmanCodesPrime);
 
-    generateHuffmanCodes(root, codes, huffmanCodes);
+    std::wofstream fout {"statistica.txt"};
+
+    fout << "Sunt " << NR_LITERE << " de litere in fisier.\n";
+
+    for (auto elem : FREQ) {
+        fout << elem.first << std::left << std::setw(1) << ": " <<
+             std::left << std::setw(10) <<
+             elem.second << "P: " <<
+             std::left << std::setw(1) <<
+             elem.second << "/" << NR_LITERE <<
+             std::left << std::setw(1) <<
+             "          cod: " <<
+             huffmanCodes.at(elem.first) <<
+             '\n';
+    }
+
+    auto entrop = entropy();
+    auto lungMedie = lungimeMedieCod(huffmanCodes);
+
+    fout << "Lungimea medie a codului: " << lungMedie;
+    fout << '\n';
+    fout << "Entropia textului de intrare:  " << entrop << '\n';
+
+    fout << "Eficienta codului: " << entrop / lungMedie << '\n';
+
+    fout << "Redundanta: " << 1 - entrop / lungMedie << '\n';
+
+    fout.close();
 
     auto compFile = compress(buffer, huffmanCodes);
 
-    std::wofstream compOUT {"compressed.txt"};
+    writeBytes("Tara_Mea.HanZip", toBytes(compFile));
 
-    compOUT << compFile;
+    //std::wifstream compIN {"compr.txt"};
+    //std::wstring comprString;
+    //compIN >> comprString;
+    //compIN.close();
 
-    compOUT.close();
+    //auto decompString = decompress(compFile, huffmanCodesPrime);
 
-    auto decomp = decompress(compFile, root);
-
-    std::wofstream decompOUT {"decomp.txt"};
-
-    decompOUT << decomp;
-
+    /*
+    std::wofstream decompOUT {"decompr.txt"};
+    decompOUT << decompString;
+    decompOUT.close();
+    */
     delTree(root);
+
+    std::cout << "Ran with success!";
 
     return 0;
 }
