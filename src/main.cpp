@@ -13,6 +13,7 @@
 #include <codecvt>
 #include <iomanip>
 #include <cmath>
+#include <bitset>
 
 //constexpr std::uint32_t SCALE {100'000};
 std::uint64_t NR_LITERE {};
@@ -36,7 +37,7 @@ void check_arg_count(int argc) {
     }
 }
 
-FPTR open_file(const char* filePath) {
+FPTR open_file(const std::string& filePath) {
     auto fptr {std::make_shared<std::wifstream>(filePath)};
     if (fptr->fail()) {
         throw Error {"Could not open file!"};
@@ -146,7 +147,7 @@ std::wstring decompress(const std::wstring& input, const std::map<std::wstring, 
 }
 
 void writeBytes(const std::string& filename, const std::vector<uint8_t>& bytes) {
-    std::ofstream file(filename, std::ios::binary);
+    std::ofstream file(filename, std::ios::binary | std::ios::app);
     file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 //01000000 01000111
@@ -185,63 +186,101 @@ float entropy() {
     return -rez;
 }
 
-int main(int argc, char** argv) {
+void parse(const std::string& fileName, std::map<std::wstring, wchar_t>& huffmanCodesPrime) {
 
-    try {
-        check_arg_count(argc);
-    } catch (Error& e) {
-        std::cout << e.what();
-        return 0;
+    std::wifstream fin {fileName};
+
+    int nrChars;
+    fin >> nrChars;
+
+    std::vector<wchar_t> chars(nrChars);
+
+    for (int i = 0; i<nrChars; ++i) {
+        fin >> chars[i];
     }
 
-    //std::cout << "Path: " << argv[1];
+    std::vector<std::wstring> codes;
 
-    //std::setlocale(LC_ALL, "en_US.UTF-8");
-    std::locale::global(std::locale({}, new std::codecvt_utf8<wchar_t>));
-    std::setlocale(LC_ALL, "ro_RO.utf8");
-    FPTR fin;
-
-    try {
-        fin = open_file(argv[1]);
-    } catch (Error& e) {
-        std::cout << e.what();
-        return 0;
+    for (int i = 0; i < nrChars; ++i) {
+        std::wstring tmp;
+        fin >> tmp;
+        codes.emplace_back(tmp);
     }
 
+    for (int i = 0; i < nrChars; ++i) {
+        auto ch = chars[i];
+        auto code = codes[i];
+        if (ch == L'1') {
+            huffmanCodesPrime[code] = L'\n';
+        } else if (ch == L'2') {
+            huffmanCodesPrime[code] = L' ';
+        } else
+            huffmanCodesPrime[code] = ch;
+    }
+
+    //discards newline and space
+    wchar_t ch;
+    fin >> ch;
+    fin >> ch;
+
+    std::vector<uint16_t> compressedData;
+
+    wchar_t data;
+
+    std::cout << "Before read: " << "eof=" << fin.eof() << ", fail=" << fin.fail() << ", bad=" << fin.bad() << ", good=" << fin.good() << std::endl;
+    fin.read(&data, sizeof(data));
+    std::cout << "After read: " << "eof=" << fin.eof() << ", fail=" << fin.fail() << ", bad=" << fin.bad() << ", good=" << fin.good() << std::endl;
+
+    while (fin.read(&data,sizeof (data))) {
+        compressedData.push_back(static_cast<uint16_t>(data));
+    }
+
+    std::string bitsString;
+
+    for (auto wch : compressedData) {
+        std::bitset<sizeof (data) * 8> bits(wch);
+        bitsString += bits.to_string();
+    }
+
+
+
+}
+
+void huffmanEncode(const std::string& fileName, const FPTR& fin) {
     std::wstringstream ss;
 
     ss << fin->rdbuf();
 
     fin->close();
 
-    std::wstring buffer {ss.str()};
+    std::wstring buffer{ss.str()};
 
     countLetters(buffer);
 
-    std::priority_queue<Node*, std::vector<Node*>, Compare> queue;
+    std::priority_queue<Node *, std::vector<Node *>, Compare> queue;
 
-    for (auto& elem : FREQ) {
-        Node* node = new Node {elem.first,
-                                   {elem.second, (int) NR_LITERE},
-                                   nullptr,
-                                   nullptr};
+    for (auto &elem: FREQ) {
+        Node *node = new Node{elem.first,
+                              {elem.second, (int) NR_LITERE},
+                              nullptr,
+                              nullptr};
         queue.push(node);
     }
 
     while (queue.size() > 1) {
         // Dequeue the two nodes with the lowest frequency
-        Node* left = queue.top();
+        Node *left = queue.top();
         queue.pop();
-        Node* right = queue.top();
+        Node *right = queue.top();
         queue.pop();
 
-        Node* newNode = new Node {'\0', left->freq + right->freq, left, right};
+        Node *newNode = new Node{'\0', left->freq + right->freq, left, right};
 
         queue.push(newNode);
     }
 
     // The remaining node is the root of the Huffman tree
-    Node* root = queue.top();
+    Node *root = queue.top();
     queue.pop();
 
     std::wstring codes;
@@ -249,11 +288,11 @@ int main(int argc, char** argv) {
     std::map<std::wstring, wchar_t> huffmanCodesPrime;
     generateHuffmanCodes(root, codes, huffmanCodes, huffmanCodesPrime);
 
-    std::wofstream fout {"statistica.txt"};
+    std::wofstream fout{"statistica.txt"};
 
     fout << "Sunt " << NR_LITERE << " de litere in fisier.\n";
 
-    for (auto elem : FREQ) {
+    for (auto elem: FREQ) {
         fout << elem.first << std::left << std::setw(1) << ": " <<
              std::left << std::setw(10) <<
              elem.second << "P: " <<
@@ -280,6 +319,28 @@ int main(int argc, char** argv) {
 
     auto compFile = compress(buffer, huffmanCodes);
 
+    std::string outFile = fileName + ".HanZip";
+
+    {
+        std::wofstream wfstream {outFile};
+        wfstream << huffmanCodes.size() << '\n';
+        for (const auto& elem : huffmanCodes) {
+            if (elem.first == L'\n') {
+                wfstream << "1" << " ";
+            } else if (elem.first == L' ') {
+                wfstream << "2" << " ";
+            } else {
+                wfstream << elem.first << " ";
+            }
+        }
+        wfstream << '\n';
+        for (const auto& elem : huffmanCodes) {
+            wfstream << elem.second << " ";
+        }
+        wfstream << '\n';
+        wfstream.close();
+    }
+
     writeBytes("Tara_Mea.HanZip", toBytes(compFile));
 
     //std::wifstream compIN {"compr.txt"};
@@ -295,6 +356,45 @@ int main(int argc, char** argv) {
     decompOUT.close();
     */
     delTree(root);
+}
+
+int main(int argc, char** argv) {
+/*
+    try {
+        check_arg_count(argc);
+    } catch (Error &e) {
+        std::cout << e.what();
+        return 0;
+    }
+*/
+    //std::cout << "Path: " << argv[1];
+
+    //std::setlocale(LC_ALL, "en_US.UTF-8");
+    std::locale::global(std::locale({}, new std::codecvt_utf8<wchar_t>));
+    std::setlocale(LC_ALL, "ro_RO.utf8");
+    FPTR fin;
+
+    std::string cmd = "decompress";
+    std::string fileName = "Tara_Mea.HanZip";
+
+
+    try {
+        fin = open_file(fileName);
+    } catch (Error &e) {
+        std::cout << e.what();
+        return 0;
+    }
+
+
+    if (cmd == "compress") {
+        huffmanEncode(fileName,fin);
+    } else if (cmd == "decompress") {
+        std::map<std::wstring, wchar_t> huffmanCodesPrime;
+        parse(fileName, huffmanCodesPrime);
+
+    }
+
+
 
     std::cout << "Ran with success!";
 
