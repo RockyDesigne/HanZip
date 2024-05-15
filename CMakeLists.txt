@@ -4,7 +4,7 @@ project(HanZip)
 set(CMAKE_CXX_STANDARD 23)
 
 set(SOURCES ./src/main.cpp)
-set(HEADERS ./include/HuffmanTree.h include/Fract.h)
+set(HEADERS include/Fract.h)
 include_directories(include)
 
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
